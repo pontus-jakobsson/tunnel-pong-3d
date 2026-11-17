@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Tunnel Pong 3D</title>
+<style>
+:root{--bg:#0b1020;--ink:#e8f1ff;--dim:#8ea3c7;--you:#35e0c2;--cpu:#ff6b8a;--ball:#ffd86b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:"Trebuchet MS","Segoe UI",sans-serif;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+#pb{position:fixed;top:calc(12px + env(safe-area-inset-top,0px));right:14px;width:44px;height:44px;border-radius:50%;border:1px solid #34467a;background:rgba(27,37,71,.8);color:var(--ink);font-size:16px;cursor:pointer;z-index:5}
+.touch-only{display:none}
+@media (pointer:coarse){.kb{display:none}.touch-only{display:block}}
+@media (max-width:520px){#msg{padding:16px 18px}}
+#hud{position:fixed;inset:0;pointer-events:none;display:flex;flex-direction:column;align-items:center;padding-top:env(safe-area-inset-top,0px)}
+#score{margin-top:14px;font-size:clamp(28px,6vw,56px);font-weight:700;letter-spacing:.04em}
+#score .y{color:var(--you)}#score .c{color:var(--cpu)}
+#msg{pointer-events:auto;cursor:pointer;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;background:rgba(11,16,32,.82);padding:22px 30px;border-radius:14px;border:1px solid #2a3a63;max-width:86vw}
+#msg h1{margin:0 0 8px;font-size:clamp(22px,4vw,34px)}
+#msg p{margin:4px 0;color:var(--dim);line-height:1.5}
+kbd{background:#1b2547;border:1px solid #34467a;border-radius:5px;padding:1px 7px;color:var(--ink)}
+#pad{position:fixed;bottom:calc(14px + env(safe-area-inset-bottom,0px));left:0;right:0;display:none;justify-content:space-between;padding:0 18px}
+#pad div{pointer-events:auto}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button id="pb" aria-label="Pause">❚❚</button>
+<div id="hud">
+  <div id="score"><span class="y">0</span> : <span class="c">0</span></div>
+  <div id="msg">
+    <h1>Tunnel Pong 3D</h1>
+    <p class="kb">Move your paddle with <kbd>←</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>→</kbd> or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>.</p>
+    <p class="touch-only">Drag a finger anywhere on the screen to move your paddle.</p>
+    <p>Return the ball past the pink paddle. First to 7 wins.</p>
+    <p class="kb"><b>Click here or press <kbd>Space</kbd> to start.</b> <kbd>P</kbd> pauses.</p>
+    <p class="touch-only"><b>Tap here to start.</b> Use ❚❚ to pause.</p>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const W=4,H=2.5,L=10,R=0.32,PW=2.2,PH=1.5;
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x0b1020);
+scene.fog=new THREE.Fog(0x0b1020,14,34);
+const cam=new THREE.PerspectiveCamera(62,1,.1,80);
+cam.position.set(0,0.6,L+7.5);
+scene.add(new THREE.AmbientLight(0xffffff,.55));
+const pl=new THREE.PointLight(0xffffff,1.1,60);pl.position.set(0,H,L);scene.add(pl);
+
+// tunnel: grid rings along z plus 4 long edges
+const lineMat=new THREE.LineBasicMaterial({color:0x2c4a8a});
+function rect(z,mat){
+  const g=new THREE.BufferGeometry().setFromPoints([[-W,-H],[W,-H],[W,H],[-W,H],[-W,-H]].map(p=>new THREE.Vector3(p[0],p[1],z)));
+  return new THREE.Line(g,mat);
+}
+for(let z=-L;z<=L;z+=2.5)scene.add(rect(z,lineMat));
+[[-W,-H],[W,-H],[W,H],[-W,H]].forEach(p=>{
+  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(p[0],p[1],-L),new THREE.Vector3(p[0],p[1],L)]),new THREE.LineBasicMaterial({color:0x4d7cff})));
+});
+// faint floor
+const floor=new THREE.Mesh(new THREE.PlaneGeometry(W*2,L*2),new THREE.MeshBasicMaterial({color:0x14204a,transparent:true,opacity:.55}));
+floor.rotation.x=-Math.PI/2;floor.position.y=-H;scene.add(floor);
+
+function paddle(color){
+  const m=new THREE.Mesh(new THREE.BoxGeometry(PW,PH,.25),new THREE.MeshStandardMaterial({color,transparent:true,opacity:.62,emissive:color,emissiveIntensity:.35}));
+  const e=new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry),new THREE.LineBasicMaterial({color}));
+  m.add(e);scene.add(m);return m;
+}
+const me=paddle(0x35e0c2),cpu=paddle(0xff6b8a);
+me.position.z=L;cpu.position.z=-L;
+
+const ball=new THREE.Mesh(new THREE.SphereGeometry(R,24,24),new THREE.MeshStandardMaterial({color:0xffd86b,emissive:0xffb800,emissiveIntensity:.8}));
+scene.add(ball);
+// depth guide: frame that follows the ball's z, plus cross-lines to the walls
+const guideMat=new THREE.LineBasicMaterial({color:0xffd86b,transparent:true,opacity:.55});
+const guide=rect(0,guideMat);scene.add(guide);
+const cross=new THREE.LineSegments(new THREE.BufferGeometry(),guideMat);scene.add(cross);
+
+let state='ready',score=[0,0],speed=9,serveDir=-1;
+const v=new THREE.Vector3(),keys={};
+const msg=document.getElementById('msg'),sc=document.getElementById('score');
+
+const touch=matchMedia('(pointer:coarse)').matches;
+function showMsg(h,p){if(touch)p=p.replace(/Press <kbd>Space<\/kbd>( or <kbd>P<\/kbd>)?/,'Tap here');msg.style.display='block';msg.innerHTML='<h1>'+h+'</h1><p>'+p+'</p>'}
+function updScore(){sc.innerHTML='<span class="y">'+score[0]+'</span> : <span class="c">'+score[1]+'</span>'}
+function serve(){
+  ball.position.set(0,0,0);speed=9;
+  const a=Math.random()*Math.PI*2;
+  v.set(Math.cos(a)*2.2,Math.sin(a)*1.6,serveDir*speed);
+  state='play';msg.style.display='none';
+}
+function point(who){
+  score[who]++;updScore();serveDir=who===0?-1:1;
+  ball.position.set(0,0,0);v.set(0,0,0);
+  if(score[who]>=7){
+    showMsg(who===0?'You win!':'CPU wins','Final score '+score[0]+' : '+score[1]+'. Press <kbd>Space</kbd> to play again.');
+    state='over';
+  }else{
+    showMsg(who===0?'You scored':'CPU scored','Press <kbd>Space</kbd> to serve.');
+    state='ready';
+  }
+}
+function hit(p,dir){
+  const dx=ball.position.x-p.position.x,dy=ball.position.y-p.position.y;
+  if(Math.abs(dx)<PW/2+R&&Math.abs(dy)<PH/2+R){
+    speed=Math.min(speed*1.06,22);
+    v.x=v.x*.4+dx*4.5;v.y=v.y*.4+dy*4.5;
+    v.z=dir*speed;
+    ball.position.z=p.position.z+dir*(R+.13);
+    return true;
+  }
+  return false;
+}
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+function step(dt){
+  const mv=7.5*dt;
+  if(keys.ArrowLeft||keys.a)me.position.x-=mv;
+  if(keys.ArrowRight||keys.d)me.position.x+=mv;
+  if(keys.ArrowUp||keys.w)me.position.y+=mv;
+  if(keys.ArrowDown||keys.s)me.position.y-=mv;
+  me.position.x=clamp(me.position.x,-W+PW/2,W-PW/2);
+  me.position.y=clamp(me.position.y,-H+PH/2,H-PH/2);
+  if(state!=='play')return;
+  // CPU: tracks the ball only while it approaches, limited speed
+  const cs=(3.6+score[0]*.25)*dt;
+  let tx=0,ty=0;
+  if(v.z<0){tx=ball.position.x;ty=ball.position.y}
+  cpu.position.x+=clamp(tx-cpu.position.x,-cs,cs);
+  cpu.position.y+=clamp(ty-cpu.position.y,-cs,cs);
+  cpu.position.x=clamp(cpu.position.x,-W+PW/2,W-PW/2);
+  cpu.position.y=clamp(cpu.position.y,-H+PH/2,H-PH/2);
+
+  ball.position.addScaledVector(v,dt);
+  const b=ball.position;
+  if(b.x>W-R){b.x=W-R;v.x=-Math.abs(v.x)}
+  if(b.x<-W+R){b.x=-W+R;v.x=Math.abs(v.x)}
+  if(b.y>H-R){b.y=H-R;v.y=-Math.abs(v.y)}
+  if(b.y<-H+R){b.y=-H+R;v.y=Math.abs(v.y)}
+  if(v.z>0&&b.z>=L-.13-R){if(!hit(me,-1)&&b.z>L+1.5)point(1)}
+  if(v.z<0&&b.z<=-L+.13+R){if(!hit(cpu,1)&&b.z<-L-1.5)point(0)}
+}
+function drawGuide(){
+  const b=ball.position;
+  guide.position.z=b.z;
+  const pts=[];
+  [[b.x,H],[b.x,-H],[W,b.y],[-W,b.y]].forEach(p=>{pts.push(new THREE.Vector3(p[0],p[1],b.z));});
+  pts.length=0;
+  pts.push(new THREE.Vector3(b.x,-H,b.z),new THREE.Vector3(b.x,H,b.z),new THREE.Vector3(-W,b.y,b.z),new THREE.Vector3(W,b.y,b.z));
+  cross.geometry.setFromPoints(pts);
+}
+function resize(){
+  const w=innerWidth,h=innerHeight;
+  renderer.setSize(w,h,false);cam.aspect=w/h;
+  const asp=w/h,d=asp<1?13:7.5;
+  cam.position.z=L+d;
+  cam.fov=asp>=1?62:Math.min(85,2*Math.atan(5/d/asp)*180/Math.PI);
+  cam.updateProjectionMatrix();
+}
+addEventListener('resize',resize);resize();
+
+const map={ArrowLeft:1,ArrowRight:1,ArrowUp:1,ArrowDown:1};
+addEventListener('keydown',e=>{
+  const k=e.key.length===1?e.key.toLowerCase():e.key;
+  if(map[k]||k===' ')e.preventDefault();
+  keys[k]=true;
+  if(k===' '){
+    if(state==='ready')serve();
+    else if(state==='over'){score=[0,0];updScore();serveDir=-1;serve()}
+    else if(state==='paused'){state='play';msg.style.display='none'}
+  }
+  if(k==='p'){
+    if(state==='play'){state='paused';showMsg('Paused','Press <kbd>Space</kbd> or <kbd>P</kbd> to resume.')}
+    else if(state==='paused'){state='play';msg.style.display='none'}
+  }
+});
+addEventListener('keyup',e=>{keys[e.key.length===1?e.key.toLowerCase():e.key]=false});
+msg.addEventListener('click',()=>{
+  window.focus();
+  if(state==='ready')serve();
+  else if(state==='over'){score=[0,0];updScore();serveDir=-1;serve()}
+  else if(state==='paused'){state='play';msg.style.display='none'}
+});
+// touch / pointer drag: relative movement of the paddle
+let drag=null;
+canvas.addEventListener('pointerdown',e=>{drag={id:e.pointerId,x:e.clientX,y:e.clientY,px:me.position.x,py:me.position.y};try{canvas.setPointerCapture(e.pointerId)}catch(_){}});
+canvas.addEventListener('pointermove',e=>{
+  if(!drag||e.pointerId!==drag.id)return;
+  const d=cam.position.z-L,upp=2*d*Math.tan(cam.fov*Math.PI/360)/innerHeight*1.4;
+  me.position.x=clamp(drag.px+(e.clientX-drag.x)*upp,-W+PW/2,W-PW/2);
+  me.position.y=clamp(drag.py-(e.clientY-drag.y)*upp,-H+PH/2,H-PH/2);
+});
+['pointerup','pointercancel'].forEach(t=>canvas.addEventListener(t,()=>{drag=null}));
+document.getElementById('pb').addEventListener('click',()=>{window.dispatchEvent(new KeyboardEvent('keydown',{key:'p'}))});
+addEventListener('blur',()=>{for(const k in keys)keys[k]=false});
+
+let last=performance.now();
+function loop(t){
+  const dt=Math.min((t-last)/1000,.05);last=t;
+  step(dt);drawGuide();
+  // slight camera sway following your paddle
+  cam.position.x+=(me.position.x*.35-cam.position.x)*.08;
+  cam.position.y+=(me.position.y*.3+.6-cam.position.y)*.08;
+  cam.lookAt(0,0,-4);
+  renderer.render(scene,cam);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
